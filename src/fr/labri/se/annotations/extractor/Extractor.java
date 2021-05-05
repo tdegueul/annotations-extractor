@@ -3,9 +3,13 @@ package fr.labri.se.annotations.extractor;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Set;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Map.Entry;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.logging.log4j.LogManager;
@@ -28,7 +32,6 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Sets;
 
 import fr.labri.se.aether.AetherDownloader;
 
@@ -78,43 +81,47 @@ public class Extractor {
 		}
 	}
 
-	public Set<String> extractAnnotations(Path jar) {
-		Set<String> ret = Sets.newHashSet();
+	public Map<String, Integer> extractAnnotations(Path jar) {
+		Map<String, Integer> ret = new HashMap<>();
 
 		try (InputStream is = Files.newInputStream(jar); JarInputStream jarStream = new JarInputStream(is)) {
 			JarEntry entry;
 			while ((entry = jarStream.getNextJarEntry()) != null) {
 				if (entry.getName().endsWith(".class")) {
-					ClassReader cr = new ClassReader(jarStream);
-					cr.accept(new ClassVisitor(Opcodes.ASM5) {
-						@Override
-						public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
-							ret.add(descriptor);
-							return null;
-						}
+					try {
+						ClassReader cr = new ClassReader(jarStream);
+						cr.accept(new ClassVisitor(Opcodes.ASM6) {
+							@Override
+							public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
+								ret.put(descriptor, ret.getOrDefault(descriptor, 0) + 1);
+								return null;
+							}
 
-						@Override
-						public MethodVisitor visitMethod(final int access, final String name, final String descriptor, final String signature, final String[] exceptions) {
-							return new MethodVisitor(Opcodes.ASM5) {
-								@Override
-								public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
-									ret.add(descriptor);
-									return null;
-								}
-							};
-						}
+							@Override
+							public MethodVisitor visitMethod(final int access, final String name, final String descriptor, final String signature, final String[] exceptions) {
+								return new MethodVisitor(Opcodes.ASM6) {
+									@Override
+									public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
+										ret.put(descriptor, ret.getOrDefault(descriptor, 0) + 1);
+										return null;
+									}
+								};
+							}
 
-						@Override
-						public FieldVisitor visitField(final int access, final String name, final String descriptor, final String signature, final Object value) {
-							return new FieldVisitor(Opcodes.ASM5) {
-								@Override
-								public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
-									ret.add(descriptor);
-									return null;
-								}
-							};
-						}
-					}, ClassReader.SKIP_CODE & ClassReader.SKIP_DEBUG & ClassReader.SKIP_FRAMES);
+							@Override
+							public FieldVisitor visitField(final int access, final String name, final String descriptor, final String signature, final Object value) {
+								return new FieldVisitor(Opcodes.ASM6) {
+									@Override
+									public AnnotationVisitor visitAnnotation(final String descriptor, final boolean visible) {
+										ret.put(descriptor, ret.getOrDefault(descriptor, 0) + 1);
+										return null;
+									}
+								};
+							}
+						}, ClassReader.SKIP_CODE & ClassReader.SKIP_DEBUG & ClassReader.SKIP_FRAMES);
+					} catch (Exception e) {
+						logger.warn("Skipping {}: {}", entry, e.getMessage());
+					}
 				}
 			}
 		} catch (Exception e) {
@@ -137,8 +144,16 @@ public class Extractor {
 
 			topLibs
 				.map(f -> extractor.extractAnnotations(f))
-				.reduce((s1, s2) -> { s1.addAll(s2); return s1; })
-				.get()
+				.flatMap(m -> m.entrySet().stream())
+				.collect(
+					Collectors.groupingBy(
+						Entry::getKey,
+						HashMap::new,
+						Collectors.summingInt(Entry::getValue)
+					))
+				.entrySet()
+				.stream()
+				.sorted(Collections.reverseOrder(Map.Entry.comparingByValue()))
 				.forEach(System.out::println);
 		} catch (Exception e) {
 			logger.error("E:", e);
